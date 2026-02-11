@@ -1,43 +1,28 @@
-From b832732b5d8509512c5021b5f4b1cf3e2ec6ea2c Mon Sep 17 00:00:00 2001
+From c259400a22270cff03774543ec30f3167cf1e637 Mon Sep 17 00:00:00 2001
 From: Vorapol Rinsatitnon <vorapol.r@pm.me>
-Date: Fri, 14 Feb 2025 11:35:56 +0700
+Date: Thu, 12 Feb 2026 03:20:02 +0700
 Subject: [PATCH] Add back LoadLibraryA fallback
 
 ---
- src/runtime/export_windows_test.go  |  4 ++
- src/runtime/os_windows.go           | 60 ++++++++++++++++++++++++++++-
- src/runtime/syscall_windows.go      | 17 +++++++-
- src/runtime/syscall_windows_test.go | 23 ++++++++++-
- src/syscall/dll_windows.go          | 28 +++++++++++++-
- src/syscall/security_windows.go     |  1 +
- src/syscall/zsyscall_windows.go     | 10 +++++
- 7 files changed, 136 insertions(+), 7 deletions(-)
+ src/runtime/os_windows.go       | 49 ++++++++++++++++++++++++++++++--
+ src/syscall/dll_windows.go      | 50 ++++++++++++++++++++++++++++++---
+ src/syscall/security_windows.go |  1 +
+ src/syscall/zsyscall_windows.go | 10 +++++++
+ 4 files changed, 103 insertions(+), 7 deletions(-)
 
-diff --git a/src/runtime/export_windows_test.go b/src/runtime/export_windows_test.go
-index 13d30d4..5ff5229 100644
---- a/src/runtime/export_windows_test.go
-+++ b/src/runtime/export_windows_test.go
-@@ -39,3 +39,7 @@ func NewContextStub() *ContextStub {
- 	ctx.set_fp(getcallerfp())
- 	return &ContextStub{ctx}
- }
-+
-+func LoadLibraryExStatus() (useEx, haveEx, haveFlags bool) {
-+	return useLoadLibraryEx, _LoadLibraryExW != nil, _AddDllDirectory != nil
-+}
 diff --git a/src/runtime/os_windows.go b/src/runtime/os_windows.go
-index fd65e34..c85fab7 100644
+index f8e7c82..2c5d22e 100644
 --- a/src/runtime/os_windows.go
 +++ b/src/runtime/os_windows.go
-@@ -42,6 +42,7 @@ const (
+@@ -41,6 +41,7 @@ const (
+ //go:cgo_import_dynamic runtime._GetThreadContext GetThreadContext%2 "kernel32.dll"
  //go:cgo_import_dynamic runtime._SetThreadContext SetThreadContext%2 "kernel32.dll"
  //go:cgo_import_dynamic runtime._LoadLibraryExW LoadLibraryExW%3 "kernel32.dll"
- //go:cgo_import_dynamic runtime._LoadLibraryW LoadLibraryW%1 "kernel32.dll"
 +//go:cgo_import_dynamic runtime._LoadLibraryA LoadLibraryA%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._PostQueuedCompletionStatus PostQueuedCompletionStatus%4 "kernel32.dll"
  //go:cgo_import_dynamic runtime._QueryPerformanceCounter QueryPerformanceCounter%1 "kernel32.dll"
  //go:cgo_import_dynamic runtime._QueryPerformanceFrequency QueryPerformanceFrequency%1 "kernel32.dll"
-@@ -75,6 +76,7 @@ var (
+@@ -74,6 +75,7 @@ var (
  	// Following syscalls are available on every Windows PC.
  	// All these variables are set by the Windows executable
  	// loader before the Go program starts.
@@ -45,15 +30,15 @@ index fd65e34..c85fab7 100644
  	_AddVectoredContinueHandler,
  	_AddVectoredExceptionHandler,
  	_CloseHandle,
-@@ -100,6 +102,7 @@ var (
+@@ -98,6 +100,7 @@ var (
+ 	_GetThreadContext,
  	_SetThreadContext,
  	_LoadLibraryExW,
- 	_LoadLibraryW,
 +	_LoadLibraryA,
  	_PostQueuedCompletionStatus,
  	_QueryPerformanceCounter,
  	_QueryPerformanceFrequency,
-@@ -158,7 +161,6 @@ var (
+@@ -156,7 +159,6 @@ var (
  	ntdlldll    = [...]uint16{'n', 't', 'd', 'l', 'l', '.', 'd', 'l', 'l', 0}
  	powrprofdll = [...]uint16{'p', 'o', 'w', 'r', 'p', 'r', 'o', 'f', '.', 'd', 'l', 'l', 0}
  	winmmdll    = [...]uint16{'w', 'i', 'n', 'm', 'm', '.', 'd', 'l', 'l', 0}
@@ -61,13 +46,15 @@ index fd65e34..c85fab7 100644
  )
  
  // Function to be called by windows CreateThread
-@@ -254,7 +256,36 @@ func windows_GetSystemDirectory() string {
+@@ -251,8 +253,37 @@ func windows_GetSystemDirectory() string {
  }
  
  func windowsLoadSystemLib(name []uint16) uintptr {
--	return stdcall3(_LoadLibraryExW, uintptr(unsafe.Pointer(&name[0])), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
+-	const _LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
+-	return stdcall(_LoadLibraryExW, uintptr(unsafe.Pointer(&name[0])), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
 +	if useLoadLibraryEx {
-+		return stdcall3(_LoadLibraryExW, uintptr(unsafe.Pointer(&name[0])), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
++		const _LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
++		return stdcall(_LoadLibraryExW, uintptr(unsafe.Pointer(&name[0])), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
 +	} else {
 +		var nameBytes [_MAX_PATH]byte
 +		n := len(name)
@@ -94,17 +81,17 @@ index fd65e34..c85fab7 100644
 +			fullPath[_MAX_PATH-1] = 0
 +		}
 +
-+		return stdcall1(_LoadLibraryA, uintptr(unsafe.Pointer(&fullPath[0])))
++		return stdcall(_LoadLibraryA, uintptr(unsafe.Pointer(&fullPath[0])))
 +	}
  }
  
  //go:linkname windows_QueryPerformanceCounter internal/syscall/windows.QueryPerformanceCounter
-@@ -272,6 +303,15 @@ func windows_QueryPerformanceFrequency() int64 {
+@@ -270,6 +301,15 @@ func windows_QueryPerformanceFrequency() int64 {
  }
  
  func loadOptionalSyscalls() {
 +	var kernel32dll = []byte("kernel32.dll\000")
-+	k32 := stdcall1(_LoadLibraryA, uintptr(unsafe.Pointer(&kernel32dll[0])))
++	k32 := stdcall(_LoadLibraryA, uintptr(unsafe.Pointer(&kernel32dll[0])))
 +	if k32 == 0 {
 +		throw("kernel32.dll not found")
 +	}
@@ -115,114 +102,70 @@ index fd65e34..c85fab7 100644
  	a32 := windowsLoadSystemLib(advapi32dll[:])
  	if a32 == 0 {
  		throw("advapi32.dll not found")
-@@ -366,6 +406,22 @@ const (
+@@ -359,6 +399,9 @@ func getPageSize() uintptr {
  // in sys_windows_386.s and sys_windows_amd64.s:
  func getlasterror() uint32
  
-+// When loading DLLs, we prefer to use LoadLibraryEx with
-+// LOAD_LIBRARY_SEARCH_* flags, if available. LoadLibraryEx is not
-+// available on old Windows, though, and the LOAD_LIBRARY_SEARCH_*
-+// flags are not available on some versions of Windows without a
-+// security patch.
-+//
-+// https://msdn.microsoft.com/en-us/library/ms684179(v=vs.85).aspx says:
-+// "Windows 7, Windows Server 2008 R2, Windows Vista, and Windows
-+// Server 2008: The LOAD_LIBRARY_SEARCH_* flags are available on
-+// systems that have KB2533623 installed. To determine whether the
-+// flags are available, use GetProcAddress to get the address of the
-+// AddDllDirectory, RemoveDllDirectory, or SetDefaultDllDirectories
-+// function. If GetProcAddress succeeds, the LOAD_LIBRARY_SEARCH_*
-+// flags can be used with LoadLibraryEx."
++//go:linkname useLoadLibraryEx syscall.useLoadLibraryEx
 +var useLoadLibraryEx bool
 +
  var timeBeginPeriodRetValue uint32
  
  // osRelaxMinNS indicates that sysmon shouldn't osRelax if the next
-diff --git a/src/runtime/syscall_windows.go b/src/runtime/syscall_windows.go
-index 85b1b8c..eb808fe 100644
---- a/src/runtime/syscall_windows.go
-+++ b/src/runtime/syscall_windows.go
-@@ -413,10 +413,23 @@ func callbackWrap(a *callbackArgs) {
+diff --git a/src/syscall/dll_windows.go b/src/syscall/dll_windows.go
+index 9d77986..adfae1f 100644
+--- a/src/syscall/dll_windows.go
++++ b/src/syscall/dll_windows.go
+@@ -13,10 +13,12 @@ import (
  
- const _LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
+ // Use double underscore to avoid name collision autogenerated functions.
+ //go:cgo_import_dynamic syscall.__LoadLibraryExW LoadLibraryExW%3 "kernel32.dll"
++//go:cgo_import_dynamic syscall.__LoadLibraryW LoadLibraryW%1 "kernel32.dll"
+ //go:cgo_import_dynamic syscall.__GetProcAddress GetProcAddress%2 "kernel32.dll"
  
-+// When available, this function will use LoadLibraryEx with the filename
-+// parameter and the important SEARCH_SYSTEM32 argument. But on systems that
-+// do not have that option, absoluteFilepath should contain a fallback
-+// to the full path inside of system32 for use with vanilla LoadLibrary.
+ var (
+ 	__LoadLibraryExW unsafe.Pointer
++	__LoadLibraryW   unsafe.Pointer
+ 	__GetProcAddress unsafe.Pointer
+ )
+ 
+@@ -109,6 +111,11 @@ func syscalln(fn, n uintptr, args ...uintptr) (r1, r2 uintptr, err Errno)
+ // //go:linkname to act as an allowlist for linker's -checklinkname, as
+ // golang.org/x/sys/windows linknames these functions.
+ 
++// Link to runtime's useLoadLibraryEx variable
 +//
- //go:linkname syscall_loadsystemlibrary syscall.loadsystemlibrary
--func syscall_loadsystemlibrary(filename *uint16) (handle, err uintptr) {
--	handle, _, err = syscall_SyscallN(uintptr(unsafe.Pointer(_LoadLibraryExW)), uintptr(unsafe.Pointer(filename)), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
-+func syscall_loadsystemlibrary(filename *uint16, absoluteFilepath *uint16) (handle, err uintptr) {
++//go:linkname useLoadLibraryEx runtime.useLoadLibraryEx
++var useLoadLibraryEx bool
++
+ //go:linkname loadlibrary
+ func loadlibrary(filename *uint16) (uintptr, Errno) {
+ 	handle, _, err := SyscallN(uintptr(__LoadLibraryExW), uintptr(unsafe.Pointer(filename)), 0, 0)
+@@ -119,9 +126,20 @@ func loadlibrary(filename *uint16) (uintptr, Errno) {
+ }
+ 
+ //go:linkname loadsystemlibrary
+-func loadsystemlibrary(filename *uint16) (uintptr, Errno) {
+-	const _LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
+-	handle, _, err := SyscallN(uintptr(__LoadLibraryExW), uintptr(unsafe.Pointer(filename)), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
++func loadsystemlibrary(filename *uint16, absoluteFilepath *uint16) (uintptr, Errno) {
++	var handle uintptr
++	var err Errno
++
 +	if useLoadLibraryEx {
-+		handle, _, err = syscall_SyscallN(uintptr(unsafe.Pointer(_LoadLibraryExW)), uintptr(unsafe.Pointer(filename)), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
++		const _LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
++		handle, _, err = SyscallN(uintptr(__LoadLibraryExW), uintptr(unsafe.Pointer(filename)), 0, _LOAD_LIBRARY_SEARCH_SYSTEM32)
 +	} else {
-+		handle, _, err = syscall_SyscallN(
-+			uintptr(unsafe.Pointer(_LoadLibraryW)),
++		handle, _, err = SyscallN(
++			uintptr(__LoadLibraryW),
 +			uintptr(unsafe.Pointer(absoluteFilepath)),
 +		)
 +	}
- 	KeepAlive(filename)
-+	KeepAlive(absoluteFilepath)
++
  	if handle != 0 {
  		err = 0
  	}
-diff --git a/src/runtime/syscall_windows_test.go b/src/runtime/syscall_windows_test.go
-index 01a9ca3..53f7110 100644
---- a/src/runtime/syscall_windows_test.go
-+++ b/src/runtime/syscall_windows_test.go
-@@ -1160,7 +1160,10 @@ uintptr_t cfunc(void) {
- 	dll, err = syscall.LoadDLL(name)
- 	if err == nil {
- 		dll.Release()
--		t.Fatalf("Bad: insecure load of DLL by base name %q before sysdll registration: %v", name, err)
-+		if wantLoadLibraryEx() {
-+			t.Fatalf("Bad: insecure load of DLL by base name %q before sysdll registration: %v", name, err)
-+		}
-+		t.Skip("insecure load of DLL, but expected")
- 	}
- }
- 
-@@ -1213,6 +1216,24 @@ func TestSyscallStackUsage(t *testing.T) {
- 	syscall.Syscall18(procSetEvent.Addr(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
- }
- 
-+// wantLoadLibraryEx reports whether we expect LoadLibraryEx to work for tests.
-+func wantLoadLibraryEx() bool {
-+	return testenv.Builder() != "" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "386")
-+}
-+
-+func TestLoadLibraryEx(t *testing.T) {
-+	use, have, flags := runtime.LoadLibraryExStatus()
-+	if use {
-+		return // success.
-+	}
-+	if wantLoadLibraryEx() {
-+		t.Fatalf("Expected LoadLibraryEx+flags to be available. (LoadLibraryEx=%v; flags=%v)",
-+			have, flags)
-+	}
-+	t.Skipf("LoadLibraryEx not usable, but not expected. (LoadLibraryEx=%v; flags=%v)",
-+		have, flags)
-+}
-+
- var (
- 	modwinmm    = syscall.NewLazyDLL("winmm.dll")
- 	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
-diff --git a/src/syscall/dll_windows.go b/src/syscall/dll_windows.go
-index a7873e6..bd82b51 100644
---- a/src/syscall/dll_windows.go
-+++ b/src/syscall/dll_windows.go
-@@ -45,7 +45,7 @@ func Syscall18(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a
- //go:noescape
- func SyscallN(trap uintptr, args ...uintptr) (r1, r2 uintptr, err Errno)
- func loadlibrary(filename *uint16) (handle uintptr, err Errno)
--func loadsystemlibrary(filename *uint16) (handle uintptr, err Errno)
-+func loadsystemlibrary(filename *uint16, absoluteFilepath *uint16) (handle uintptr, err Errno)
- func getprocaddress(handle uintptr, procname *uint8) (proc uintptr, err Errno)
- 
- // A DLL implements access to a single DLL.
-@@ -54,6 +54,26 @@ type DLL struct {
+@@ -143,6 +161,26 @@ type DLL struct {
  	Handle Handle
  }
  
@@ -249,7 +192,7 @@ index a7873e6..bd82b51 100644
  // LoadDLL loads the named DLL file into memory.
  //
  // If name is not an absolute path and is not a known system DLL used by
-@@ -70,7 +90,11 @@ func LoadDLL(name string) (*DLL, error) {
+@@ -159,7 +197,11 @@ func LoadDLL(name string) (*DLL, error) {
  	var h uintptr
  	var e Errno
  	if sysdll.IsSystemDLL[name] {
@@ -275,7 +218,7 @@ index 4e988c4..45b1908 100644
  // An access token contains the security information for a logon session.
  // The system creates an access token when a user logs on, and every
 diff --git a/src/syscall/zsyscall_windows.go b/src/syscall/zsyscall_windows.go
-index c0585a6..85c66de 100644
+index 70ac19a..aec4b2d 100644
 --- a/src/syscall/zsyscall_windows.go
 +++ b/src/syscall/zsyscall_windows.go
 @@ -128,6 +128,7 @@ var (
@@ -286,7 +229,7 @@ index c0585a6..85c66de 100644
  	procGetSystemTimeAsFileTime            = modkernel32.NewProc("GetSystemTimeAsFileTime")
  	procGetTempPathW                       = modkernel32.NewProc("GetTempPathW")
  	procGetTimeZoneInformation             = modkernel32.NewProc("GetTimeZoneInformation")
-@@ -871,6 +872,15 @@ func GetStdHandle(stdhandle int) (handle Handle, err error) {
+@@ -872,6 +873,15 @@ func GetStdHandle(stdhandle int) (handle Handle, err error) {
  	return
  }
  
@@ -300,8 +243,8 @@ index c0585a6..85c66de 100644
 +}
 +
  func GetSystemTimeAsFileTime(time *Filetime) {
- 	Syscall(procGetSystemTimeAsFileTime.Addr(), 1, uintptr(unsafe.Pointer(time)), 0, 0)
+ 	SyscallN(procGetSystemTimeAsFileTime.Addr(), uintptr(unsafe.Pointer(time)))
  	return
 -- 
-2.39.5
+2.47.3
 

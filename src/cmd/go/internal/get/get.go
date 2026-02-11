@@ -16,6 +16,7 @@ import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/load"
+	"cmd/go/internal/modload"
 	"cmd/go/internal/search"
 	"cmd/go/internal/str"
 	"cmd/go/internal/vcs"
@@ -119,7 +120,9 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 		base.Fatalf("go: modules not implemented")
 	}
 
-	work.BuildInit()
+	moduleLoaderState := modload.NewState()
+
+	work.BuildInit(moduleLoaderState)
 
 	if *getF && !*getU {
 		base.Fatalf("go: cannot use -f flag without -u")
@@ -172,7 +175,7 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 		mode |= load.GetTestDeps
 	}
 	for _, pkg := range downloadPaths(args) {
-		download(ctx, pkg, nil, &stk, mode)
+		download(moduleLoaderState, ctx, pkg, nil, &stk, mode)
 	}
 	base.ExitIfErrors()
 
@@ -185,7 +188,7 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 	// everything.
 	load.ClearPackageCache()
 
-	pkgs := load.PackagesAndErrors(ctx, load.PackageOpts{}, args)
+	pkgs := load.PackagesAndErrors(moduleLoaderState, ctx, load.PackageOpts{}, args)
 	load.CheckPackageErrors(pkgs)
 
 	// Phase 3. Install.
@@ -196,7 +199,7 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 		return
 	}
 
-	work.InstallPackages(ctx, args, pkgs)
+	work.InstallPackages(moduleLoaderState, ctx, args, pkgs)
 }
 
 // downloadPaths prepares the list of paths to pass to download.
@@ -251,7 +254,7 @@ var downloadRootCache = map[string]bool{}
 
 // download runs the download half of the get command
 // for the package or pattern named by the argument.
-func download(ctx context.Context, arg string, parent *load.Package, stk *load.ImportStack, mode int) {
+func download(moduleLoaderState *modload.State, ctx context.Context, arg string, parent *load.Package, stk *load.ImportStack, mode int) {
 	if mode&load.ResolveImport != 0 {
 		// Caller is responsible for expanding vendor paths.
 		panic("internal error: download mode has useVendor set")
@@ -259,9 +262,9 @@ func download(ctx context.Context, arg string, parent *load.Package, stk *load.I
 	load1 := func(path string, mode int) *load.Package {
 		if parent == nil {
 			mode := 0 // don't do module or vendor resolution
-			return load.LoadPackage(ctx, load.PackageOpts{}, path, base.Cwd(), stk, nil, mode)
+			return load.LoadPackage(moduleLoaderState, ctx, load.PackageOpts{}, path, base.Cwd(), stk, nil, mode)
 		}
-		p, err := load.LoadImport(ctx, load.PackageOpts{}, path, parent.Dir, parent, stk, nil, mode|load.ResolveModule)
+		p, err := load.LoadImport(moduleLoaderState, ctx, load.PackageOpts{}, path, parent.Dir, parent, stk, nil, mode|load.ResolveModule)
 		if err != nil {
 			base.Errorf("%s", err)
 		}
@@ -406,9 +409,9 @@ func download(ctx context.Context, arg string, parent *load.Package, stk *load.I
 			// download does caching based on the value of path,
 			// so it must be the fully qualified path already.
 			if i >= len(p.Imports) {
-				path = load.ResolveImportPath(p, path)
+				path = load.ResolveImportPath(moduleLoaderState, p, path)
 			}
-			download(ctx, path, p, stk, 0)
+			download(moduleLoaderState, ctx, path, p, stk, 0)
 		}
 
 		if isWildcard {

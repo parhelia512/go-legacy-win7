@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"internal/abi"
 	"internal/race"
+	"internal/runtime/syscall/windows"
 	"internal/syscall/windows/sysdll"
 	"internal/testenv"
 	"io"
@@ -776,7 +777,7 @@ func TestSyscallN(t *testing.T) {
 		t.Skipf("skipping test: GOARCH=%s", runtime.GOARCH)
 	}
 
-	for arglen := 0; arglen <= runtime.MaxArgs; arglen++ {
+	for arglen := 0; arglen <= windows.MaxArgs; arglen++ {
 		arglen := arglen
 		t.Run(fmt.Sprintf("arg-%d", arglen), func(t *testing.T) {
 			t.Parallel()
@@ -1164,10 +1165,7 @@ uintptr_t cfunc(void) {
 	dll, err = syscall.LoadDLL(name)
 	if err == nil {
 		dll.Release()
-		if wantLoadLibraryEx() {
-			t.Fatalf("Bad: insecure load of DLL by base name %q before sysdll registration: %v", name, err)
-		}
-		t.Skip("insecure load of DLL, but expected")
+		t.Fatalf("Bad: insecure load of DLL by base name %q before sysdll registration: %v", name, err)
 	}
 }
 
@@ -1218,24 +1216,6 @@ func TestSyscallStackUsage(t *testing.T) {
 	// See https://go.dev/issue/69813.
 	syscall.Syscall15(procSetEvent.Addr(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	syscall.Syscall18(procSetEvent.Addr(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-}
-
-// wantLoadLibraryEx reports whether we expect LoadLibraryEx to work for tests.
-func wantLoadLibraryEx() bool {
-	return testenv.Builder() != "" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "386")
-}
-
-func TestLoadLibraryEx(t *testing.T) {
-	use, have, flags := runtime.LoadLibraryExStatus()
-	if use {
-		return // success.
-	}
-	if wantLoadLibraryEx() {
-		t.Fatalf("Expected LoadLibraryEx+flags to be available. (LoadLibraryEx=%v; flags=%v)",
-			have, flags)
-	}
-	t.Skipf("LoadLibraryEx not usable, but not expected. (LoadLibraryEx=%v; flags=%v)",
-		have, flags)
 }
 
 var (
